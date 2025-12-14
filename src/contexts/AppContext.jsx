@@ -1,9 +1,9 @@
-// src/contexts/AppContext.jsx - GÜNCELLENMİŞ VERSİYON
+// src/contexts/AppContext.jsx - TAM DOSYA (DÜZELTİLMİŞ)
 import React, { createContext, useContext, useState, useEffect } from 'react';
 
 const AppContext = createContext();
 
-// SmartParser sınıfı - DEĞİŞİKLİK: findPerson tamamen güncellendi
+// SmartParser sınıfını buraya ekliyoruz
 class SmartParser {
   constructor(products = [], suppliers = [], customers = []) {
     this.products = products;
@@ -52,16 +52,14 @@ class SmartParser {
     // 1. İŞLEM TÜRÜNÜ BELİRLE
     result.detected.transactionType = this.detectTransactionType(lowerText);
     
-    // 2. KİŞİYİ BUL - YENİ: TAM EŞLEŞME ŞART!
-    const personResult = this.findPerson(text); // lowerText yerine orijinal text
+    // 2. KİŞİYİ BUL - BASİT HALE GETİRİLDİ
+    const personResult = this.findPerson(text);
     result.detected.person = personResult.person;
-    
     if (personResult.type) {
       result.missing[personResult.type] = !personResult.found;
     }
     
     if (!personResult.found && personResult.guessedName) {
-      // UYARI: Kişi bulunamadı, kullanıcıya sorulacak
       result.validation.warnings.push(
         `${personResult.guessedName} ${personResult.type === 'supplier' ? 'tedarikçisi' : 'müşterisi'} bulunamadı.`
       );
@@ -72,13 +70,19 @@ class SmartParser {
       };
     }
 
-    // 3. ÜRÜNÜ BUL
+    // 3. ÜRÜNÜ BUL - TAHMİN ETME, SADECE VAR OLANI BUL
     const productResult = this.findProduct(lowerText);
     result.detected.product = productResult.product;
     result.detected.unit = productResult.unit;
     result.missing.product = !productResult.found;
     
-    if (!productResult.found && productResult.guessedName) {
+    // Eğer işlem "tahsilat" veya "ödeme" ise ürün arama!
+    if (result.detected.transactionType === 'payment') {
+      result.missing.product = false; // Ödeme/tahsilatta ürün zorunlu değil
+      result.detected.product = null;
+    }
+    
+    if (!productResult.found && productResult.guessedName && result.detected.transactionType !== 'payment') {
       result.validation.warnings.push(
         `"${productResult.guessedName}" ürünü bulunamadı.`
       );
@@ -89,29 +93,49 @@ class SmartParser {
       };
     }
 
-    // 4. MİKTAR VE FİYAT BUL
+    // 4. MİKTAR VE FİYAT BUL - DÜZELTİLMİŞ!
     const numbers = this.extractNumbers(text);
+    
+    // ÖNEMLİ: "tahsilat" veya "ödeme" işlemlerinde farklı davran
     if (numbers.length >= 1) {
-      result.detected.quantity = numbers[0];
-      
-      if (numbers.length >= 2) {
-        if (lowerText.includes('tanesi') || lowerText.includes('birisi') || lowerText.includes('metresi')) {
-          result.detected.unitPrice = numbers[1];
-          result.detected.totalAmount = result.detected.quantity * result.detected.unitPrice;
-        } else {
-          result.detected.totalAmount = numbers[1];
-          result.detected.unitPrice = result.detected.quantity > 0 ? result.detected.totalAmount / result.detected.quantity : 0;
+      if (lowerText.includes('tahsilat') || lowerText.includes('ödeme') || 
+          lowerText.includes('tl') || lowerText.includes('₺') || 
+          result.detected.transactionType === 'payment') {
+        // PARA İŞLEMLERİ: İlk sayı TUTAR'dır
+        result.detected.totalAmount = numbers[0];
+        result.detected.quantity = 1; // Para işlemlerinde miktar 1
+        result.detected.unitPrice = numbers[0]; // Birim fiyat = toplam tutar
+        result.detected.unit = 'TL'; // Birim TL olarak ayarla
+      } 
+      // ÜRÜN İŞLEMLERİ
+      else if (lowerText.includes('aldım') || lowerText.includes('sattım') || 
+               result.detected.transactionType === 'purchase' || 
+               result.detected.transactionType === 'sale') {
+        result.detected.quantity = numbers[0];
+        
+        if (numbers.length >= 2) {
+          if (lowerText.includes('tanesi') || lowerText.includes('birisi') || lowerText.includes('metresi')) {
+            result.detected.unitPrice = numbers[1];
+            result.detected.totalAmount = result.detected.quantity * result.detected.unitPrice;
+          } else {
+            result.detected.totalAmount = numbers[1];
+            result.detected.unitPrice = result.detected.quantity > 0 ? result.detected.totalAmount / result.detected.quantity : 0;
+          }
         }
       }
     }
 
     // 5. BİRİM BELİRLE
-    result.detected.unit = this.detectUnit(lowerText) || productResult.unit || 'adet';
+    if (lowerText.includes('tl') || lowerText.includes('₺') || result.detected.transactionType === 'payment') {
+      result.detected.unit = 'TL';
+    } else {
+      result.detected.unit = this.detectUnit(lowerText) || productResult.unit || 'adet';
+    }
     
     // 6. ÖDEME DURUMU
     result.detected.paymentStatus = this.detectPaymentStatus(lowerText);
 
-    // 7. VALİDASYON
+    // 7. VALİDASYON - DÜZELTİLMİŞ
     this.runValidations(result);
 
     console.log('✅ PARSING SONUCU:', result);
@@ -131,61 +155,36 @@ class SmartParser {
     return 'note';
   }
 
-  // YENİ: findPerson fonksiyonu - KESİN EŞLEŞME!
+  // DÜZELTİLMİŞ: findPerson fonksiyonu - BASİT VE ÇALIŞAN
   findPerson(text) {
     const lowerText = text.toLowerCase();
-    console.log('🔍 Kişi aranıyor (TAM EŞLEŞME):', text);
+    console.log('🔍 Kişi aranıyor:', text);
     
-    // ÖNCE: Tam eşleşme ara (kesinlikle doğru olan)
+    // ÖNCE: Basit ve doğru eşleşme
     for (const supplier of this.suppliers) {
-      const cleanSupplierName = supplier.name.toLowerCase().replace(/[^\wğüşıöçĞÜŞİÖÇ]/g, '');
-      const cleanText = lowerText.replace(/[^\wğüşıöçĞÜŞİÖÇ]/g, ' ');
-      
-      // Tam isim geçiyor mu?
-      if (cleanText.includes(cleanSupplierName)) {
-        console.log('✅ Tedarikçi TAM EŞLEŞME:', supplier.name);
+      if (lowerText.includes(supplier.name.toLowerCase())) {
+        console.log('✅ Tedarikçi bulundu:', supplier.name);
         return { found: true, person: supplier, type: 'supplier' };
       }
     }
     
     for (const customer of this.customers) {
-      const cleanCustomerName = customer.name.toLowerCase().replace(/[^\wğüşıöçĞÜŞİÖÇ]/g, '');
-      const cleanText = lowerText.replace(/[^\wğüşıöçĞÜŞİÖÇ]/g, ' ');
-      
-      if (cleanText.includes(cleanCustomerName)) {
-        console.log('✅ Müşteri TAM EŞLEŞME:', customer.name);
+      if (lowerText.includes(customer.name.toLowerCase())) {
+        console.log('✅ Müşteri bulundu:', customer.name);
         return { found: true, person: customer, type: 'customer' };
       }
     }
     
-    // EĞER BULUNAMADIYSA, sadece ilk kelimeye bak (tahmin için)
-    const words = text.split(' ').map(w => w.replace(/[^\wğüşıöçĞÜŞİÖÇ]/g, '')).filter(w => w.length > 2);
-    
-    if (words.length > 0) {
-      const firstName = words[0];
-      console.log('❌ Tam eşleşme yok, tahmin:', firstName);
-      
-      // İşlem türüne göre tahmin
-      if (lowerText.includes('aldım') || lowerText.includes('tedarik')) {
-        return { 
-          found: false, 
-          guessedName: firstName.charAt(0).toUpperCase() + firstName.slice(1),
-          type: 'supplier' 
-        };
-      } else if (lowerText.includes('sattım') || lowerText.includes('tahsilat') || lowerText.includes('ödeme aldım')) {
-        return { 
-          found: false, 
-          guessedName: firstName.charAt(0).toUpperCase() + firstName.slice(1),
-          type: 'customer' 
-        };
-      }
-    }
-    
-    console.log('❌ Kişi bulunamadı');
+    console.log('❌ Kişi bulunamadı:', text);
     return { found: false, guessedName: null, type: null };
   }
 
   findProduct(text) {
+    // ÖNEMLİ: Eğer metin "tahsilat" veya "ödeme" içeriyorsa, ürün ARAMA!
+    if (text.includes('tahsilat') || text.includes('ödeme') || text.includes('tl') || text.includes('₺')) {
+      return { found: false, guessedName: null, unit: 'adet' };
+    }
+    
     for (const product of this.products) {
       if (text.includes(product.name.toLowerCase())) {
         return { 
@@ -212,11 +211,13 @@ class SmartParser {
       }
     }
     
+    // "Ayşe" gibi kişi isimlerini ürün olarak algılama!
     const words = text.split(' ');
     for (let i = 0; i < words.length; i++) {
       const word = words[i].toLowerCase().replace(/[^a-zğüşıöç]/g, '');
-      if (word.length > 2 && !this.isCommonWord(word) && 
-          !['aldım', 'sattım', 'tahsilat', 'ödeme'].includes(word)) {
+      if (word.length > 2 && 
+          !this.isCommonWord(word) && 
+          !['aldım', 'sattım', 'tahsilat', 'ödeme', 'tl', '₺', 'ayşe', 'ahmet', 'kaan', 'demir'].includes(word)) {
         
         let unit = 'adet';
         if (i + 1 < words.length) {
@@ -249,7 +250,8 @@ class SmartParser {
       'kg': ['kg', 'kilo', 'kilogram'],
       'adet': ['adet', 'tane', 'ad.', 'ad '],
       'paket': ['paket', 'pkt'],
-      'kutu': ['kutu', 'kutu']
+      'kutu': ['kutu', 'kutu'],
+      'tl': ['tl', '₺', 'lira']
     };
     
     for (const [unit, keywords] of Object.entries(units)) {
@@ -313,6 +315,7 @@ class SmartParser {
     if (text.includes('kg') || text.includes('kilo')) return 'kg';
     if (text.includes('paket') || text.includes('pkt')) return 'paket';
     if (text.includes('kutu')) return 'kutu';
+    if (text.includes('tl') || text.includes('₺')) return 'TL';
     return 'adet';
   }
 
@@ -321,7 +324,8 @@ class SmartParser {
       'ben', 'sen', 'o', 'biz', 'siz', 'onlar',
       'ile', 've', 'veya', 'ama', 'fakat',
       'bugün', 'dün', 'yarın', 'şimdi',
-      'para', 'tl', 'lira', 'dolar', 'euro'
+      'para', 'tl', 'lira', 'dolar', 'euro',
+      'ayşe', 'ahmet', 'kaan', 'demir', 'yılmaz', 'ticaret', 'yapı'
     ];
     return commonWords.includes(word);
   }
@@ -332,6 +336,7 @@ class SmartParser {
       result.validation.isValid = false;
     }
     
+    // Ödeme/tahsilat işlemlerinde ürün zorunlu DEĞİL
     if (!result.detected.product && result.detected.transactionType === 'purchase') {
       result.validation.warnings.push('Alış işlemi için ürün belirtilmedi.');
     }
@@ -381,7 +386,7 @@ export const AppProvider = ({ children }) => {
     }
   };
 
-  // Başlangıç verileri
+  // Başlangıç verileri - Ayşe'nin borcunu 0 yap
   const initialSuppliers = [
     { id: 1, name: 'Kaan Yapı', type: 'supplier', balance: -1000, phone: '0555 123 4567' },
     { id: 2, name: 'Demir Ticaret', type: 'supplier', balance: -2500, phone: '0555 987 6543' }
@@ -389,7 +394,7 @@ export const AppProvider = ({ children }) => {
 
   const initialCustomers = [
     { id: 101, name: 'Ahmet Yılmaz', type: 'customer', balance: 1500, phone: '0532 111 2233' },
-    { id: 102, name: 'Ayşe Demir', type: 'customer', balance: 500, phone: '0533 444 5566' }
+    { id: 102, name: 'Ayşe Demir', type: 'customer', balance: 0, phone: '0533 444 5566' } // BALANCE: 0
   ];
 
   const initialProducts = [
@@ -463,12 +468,11 @@ export const AppProvider = ({ children }) => {
 
   // ==================== ANA FONKSİYONLAR ====================
 
-  // 1. CARİ BAKİYE GÜNCELLE - YENİ: DOĞRU HESAPLAMA
+  // 1. CARİ BAKİYE GÜNCELLE - DÜZELTİLMİŞ
   const updatePersonBalance = (personId, amount, type = 'purchase') => {
     console.log('🔄 BAKİYE GÜNCELLENİYOR:', { personId, amount, type });
     
     let personArray, setPersonArray;
-    let personType = '';
     
     // Kişiyi bul
     const supplier = suppliers.find(s => s.id === personId);
@@ -477,11 +481,9 @@ export const AppProvider = ({ children }) => {
     if (supplier) {
       personArray = suppliers;
       setPersonArray = setSuppliers;
-      personType = 'supplier';
     } else if (customer) {
       personArray = customers;
       setPersonArray = setCustomers;
-      personType = 'customer';
     } else {
       console.error('❌ Kişi bulunamadı:', personId);
       return false;
@@ -493,20 +495,21 @@ export const AppProvider = ({ children }) => {
     
     console.log(`Güncellenecek kişi: ${person.name}, Mevcut bakiye: ${person.balance} TL`);
     
-    // YENİ: Doğru hesaplama mantığı
+    // DOĞRU HESAPLAMA:
     if (type === 'payment') {
-      // Tahsilat/Ödeme: Müşteriden tahsilat -> borç azalır (-500 TL)
-      // Tedarikçiye ödeme -> borç azalır (+1000 TL)
+      // ÖDEME/TAHSİLAT: amount negatifse tahsilat, pozitifse ödeme
+      // Müşteriden tahsilat: müşterinin borcu azalır (balance artar)
+      // Tedarikçiye ödeme: tedarikçinin borcu azalır (balance artar)
       newBalance = person.balance + amount;
-      console.log(`Ödeme/Tahsilat: ${amount} TL eklendi. Yeni bakiye: ${newBalance} TL`);
+      console.log(`Ödeme/Tahsilat: ${amount} TL. Yeni bakiye: ${newBalance} TL`);
     } else if (type === 'purchase') {
-      // Alış: Tedarikçiye borçlanma (negatif artar)
+      // ALIŞ: Tedarikçiye borç (balance azalır/negatif artar)
       newBalance = person.balance - Math.abs(amount);
-      console.log(`Alış: ${amount} TL borç eklendi. Yeni bakiye: ${newBalance} TL`);
+      console.log(`Alış: ${amount} TL. Yeni bakiye: ${newBalance} TL`);
     } else if (type === 'sale') {
-      // Satış: Müşteriden alacak (pozitif artar)
+      // SATIŞ: Müşteriden alacak (balance artar/pozitif artar)
       newBalance = person.balance + Math.abs(amount);
-      console.log(`Satış: ${amount} TL alacak eklendi. Yeni bakiye: ${newBalance} TL`);
+      console.log(`Satış: ${amount} TL. Yeni bakiye: ${newBalance} TL`);
     }
     
     // State'i güncelle
@@ -518,7 +521,7 @@ export const AppProvider = ({ children }) => {
     return true;
   };
 
-  // 2. SMART PARSER İLE İŞLEM İŞLEME - YENİ: KULLANICI ONAYI
+  // 2. SMART PARSER İLE İŞLEM İŞLEME - DÜZELTİLMİŞ
   const processNaturalLanguage = (text) => {
     console.log('=== SMART PARSER İLE İŞLEME ===', text);
     
@@ -534,7 +537,7 @@ export const AppProvider = ({ children }) => {
       return { parsed: false, text, errors: parsedResult.validation.errors };
     }
     
-    // YENİ: Eksik kişi varsa KESİNLİKLE SOR!
+    // Eksik kişi varsa KULLANICIYA SOR!
     if (parsedResult.missing.supplier && parsedResult.autoComplete.supplier) {
       const userConfirmed = window.confirm(
         `"${parsedResult.autoComplete.supplier.name}" isimli tedarikçi bulunamadı.\n\n` +
@@ -584,12 +587,12 @@ export const AppProvider = ({ children }) => {
       }
     }
     
-    // Ürün ID'sini bul
+    // Ürün ID'sini bul (ödeme/tahsilat işlemlerinde ürün yok)
     let productId = null;
-    if (detected.product && detected.product.id) {
+    if (detected.product && detected.product.id && detected.transactionType !== 'payment') {
       productId = detected.product.id;
-    } else if (parsedResult.autoComplete.product) {
-      // Yeni ürün oluştur
+    } else if (parsedResult.autoComplete.product && detected.transactionType !== 'payment') {
+      // Yeni ürün oluştur (sadece alış/satış işlemlerinde)
       const productData = parsedResult.autoComplete.product;
       const userConfirmed = window.confirm(
         `"${productData.name}" ürünü için yeni ürün kartı oluşturulsun mu?\n\n` +
@@ -614,16 +617,25 @@ export const AppProvider = ({ children }) => {
       }
     }
     
-    // amountForBalance hesapla - YENİ: Doğru hesap
+    // amountForBalance hesapla - DÜZELTİLMİŞ!
     let amountForBalance = 0;
     if (detected.transactionType === 'payment') {
-      // Tahsilat/Ödeme: Miktar işareti önemli
-      amountForBalance = detected.totalAmount;
+      // TAHSİLAT/ÖDEME: 
+      // Müşteriden tahsilat: amountForBalance NEGATİF (borç azalır)
+      // Tedarikçiye ödeme: amountForBalance POZİTİF (borç azalır)
+      const person = detected.person;
+      if (person) {
+        const isSupplier = suppliers.find(s => s.id === person.id);
+        // Müşteriden tahsilat: -miktar, Tedarikçiye ödeme: +miktar
+        amountForBalance = isSupplier ? detected.totalAmount : -detected.totalAmount;
+      } else {
+        amountForBalance = -detected.totalAmount; // Varsayılan: tahsilat
+      }
     } else if (detected.transactionType === 'purchase') {
-      // Alış: Negatif (borç artar)
+      // ALIŞ: Negatif (borç artar)
       amountForBalance = -detected.totalAmount;
     } else if (detected.transactionType === 'sale') {
-      // Satış: Pozitif (alacak artar)
+      // SATIŞ: Pozitif (alacak artar)
       amountForBalance = detected.totalAmount;
     }
     
@@ -644,8 +656,7 @@ export const AppProvider = ({ children }) => {
         personName: detected.person ? detected.person.name : 
                   (parsedResult.autoComplete.supplier ? parsedResult.autoComplete.supplier.name :
                   parsedResult.autoComplete.customer ? parsedResult.autoComplete.customer.name : null),
-        productName: detected.product ? detected.product.name : 
-                    (parsedResult.autoComplete.product ? parsedResult.autoComplete.product.name : null),
+        productName: detected.product ? detected.product.name : null,
         unit: detected.unit,
         warnings: parsedResult.validation.warnings,
         suggestions: parsedResult.validation.suggestions
@@ -670,7 +681,7 @@ export const AppProvider = ({ children }) => {
     const updatedTransactions = [transaction, ...transactions];
     setTransactions(updatedTransactions);
     
-    // 2. Stok güncelle (alış/satış ise)
+    // 2. Stok güncelle (alış/satış ise ve ürün varsa)
     if (productId && (type === 'purchase' || type === 'sale')) {
       const quantityChange = type === 'purchase' ? quantity : -quantity;
       updateProductStock(productId, quantityChange);
